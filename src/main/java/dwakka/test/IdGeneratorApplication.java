@@ -30,6 +30,6 @@ public class IdGeneratorApplication extends Application<ConfigurationApplication
                 new ApplicationHealthCheck ();
         environment.healthChecks().register("batch_health_check", healthCheck);
 
-        environment.jersey().register(IdGeneratorResource.class);
+        environment.jersey().register(new IdGeneratorResource());
     }
 }

@@ -19,7 +19,6 @@ import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.net.URI;
-import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -33,7 +32,7 @@ public class IdGeneratorResource {
     private final static ExecutorService executorService = Executors.newFixedThreadPool(8);
     private final static ActorSystem system = ActorSystem.create("akka-system");
 
-    private Set<String> repository = new HashSet<>();
+    private Set<String> repository;
 
     @GET
     @Timed(name = "generateIds")
@@ -84,20 +83,33 @@ public class IdGeneratorResource {
     }
 
 
+    @GET
+    @Path("ids")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response fetch () throws Exception {
+        return Response.ok().entity(repository).build();
+    }
+
+
     @POST
     @Path("ids")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
     public Response saveIds (@Context HttpServletRequest request, Set<String> ids) throws Exception {
 
-        if(repository.size() != 0) {
+        if(repository != null) {
             return Response.status(Response.Status.BAD_REQUEST).build();
         }
         repository = ids;
 
-        return Response.created(new URI(request.getRequestURI())).build();
+        return Response.created(new URI(request.getRequestURI())).entity(repository).build();
     }
 
     @PUT
     @Path("ids")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
     public Response update (@Context HttpServletRequest request, Set<String> ids) throws Exception {
 
         if(repository.size() == 0) {
@@ -106,12 +118,15 @@ public class IdGeneratorResource {
         repository.clear();
         repository.addAll(ids);
 
-        return Response.accepted(new URI(request.getRequestURI())).build();
+        return Response.accepted().entity(repository).build();
     }
 
 
     @DELETE
-    public Response delete (String id) {
+    @Path("ids/{id}")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response delete (@PathParam("id") String id) {
 
         boolean remove = repository.remove(id);
 
