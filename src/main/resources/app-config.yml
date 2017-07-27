@@ -1,0 +1,14 @@
+logging:
+  level: INFO
+  loggers:
+    com.leadspace: WARN
+  appenders:
+    - type: console
+
+
+server:
+  type: default
+  maxThreads: 512
+
+
+metricsHost: localhost
