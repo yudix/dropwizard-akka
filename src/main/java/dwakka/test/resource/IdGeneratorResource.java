@@ -6,6 +6,8 @@ import akka.actor.Props;
 import akka.pattern.PatternsCS;
 import com.codahale.metrics.annotation.Timed;
 import dwakka.test.actor.MyActor;
+import dwakka.test.model.GeneratedResponse;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,6 +21,7 @@ import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.net.URI;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -27,111 +30,106 @@ import java.util.concurrent.TimeUnit;
 @Path("v3")
 public class IdGeneratorResource {
 
-    private final static Logger logger = LoggerFactory.getLogger(IdGeneratorResource.class);
+	private final static Logger logger = LoggerFactory.getLogger(IdGeneratorResource.class);
+	private final static ExecutorService executorService = Executors.newFixedThreadPool(8);
+	private final static ActorSystem system = ActorSystem.create("akka-system");
 
-    private final static ExecutorService executorService = Executors.newFixedThreadPool(8);
-    private final static ActorSystem system = ActorSystem.create("akka-system");
+	private Set<String> repository = new HashSet<>();
 
-    private Set<String> repository;
+	@GET
+	@Timed(name = "generateIds")
+	@Path("generate/{number}")
+	@Produces(MediaType.APPLICATION_JSON)
+	public void generateIds(@PathParam("number") int number, @Suspended final AsyncResponse asyncResponse) {
 
-    @GET
-    @Timed(name = "generateIds")
-    @Path("generate/{number}")
-    @Produces(MediaType.APPLICATION_JSON)
-    public void generateIds (@PathParam("number") int number, @Suspended final AsyncResponse asyncResponse) {
+		setTimeout(number, asyncResponse);
 
-        setTimeout(number, asyncResponse);
+		registerOnComplete(asyncResponse);
 
-        registerOnComplete(asyncResponse);
+		submitJob(number, asyncResponse);
+	}
 
-        submitJob(number, asyncResponse);
+	private void submitJob(int number, AsyncResponse asyncResponse) {
+		executorService.submit(() -> {
 
-    }
+			ActorRef worker = system.actorOf(Props.create(MyActor.class));
+			PatternsCS.ask(worker, Integer.valueOf(number), 5000).toCompletableFuture().thenAccept((response) -> {
+				GeneratedResponse gr = (GeneratedResponse) response;
+				repository.addAll(gr.entries);
+				asyncResponse.resume(response);
+			});
+		});
+	}
 
-    private void submitJob(int number, AsyncResponse asyncResponse) {
-        executorService.submit(() -> {
+	private void registerOnComplete(@Suspended AsyncResponse asyncResponse) {
+		asyncResponse.register((CompletionCallback) throwable -> {
+			if (throwable == null) {
+				logger.debug("dispatched to client thread id {}", Thread.currentThread().getId());
+			} else {
+				logger.error("An error has occurred during request processing");
+				asyncResponse.resume(throwable);
+			}
+		}, (ConnectionCallback) disconnected -> {
+			logger.error("Connection lost or closed by the client!");
+		});
+	}
 
-            ActorRef worker = system.actorOf(Props.create(MyActor.class));
-            PatternsCS.ask(worker, Integer.valueOf(number), 5000)
-                    .toCompletableFuture()
-            .thenAccept((response) -> asyncResponse.resume(response));
-        });
-    }
+	private void setTimeout(int numberOfRequests, AsyncResponse asyncResponse) {
+		asyncResponse.setTimeoutHandler(asyncResponse1 -> {
+			logger.error("Timeout on request with {} ", numberOfRequests);
+			asyncResponse1.resume(Response.Status.SERVICE_UNAVAILABLE);
+		});
+		asyncResponse.setTimeout(10, TimeUnit.SECONDS);
+	}
 
-    private void registerOnComplete(@Suspended AsyncResponse asyncResponse) {
-        asyncResponse.register(
-                (CompletionCallback) throwable -> {
-                    if (throwable == null) {
-                        logger.debug("dispatched to client thread id {}", Thread.currentThread().getId());
-                    } else {
-                        logger.error("An error has occurred during request processing");
-                        asyncResponse.resume(throwable);
-                    }
-                },
-                (ConnectionCallback) disconnected -> {
-                    logger.error("Connection lost or closed by the client!");
-                }
-        );
-    }
+	@GET
+	@Path("ids")
+	@Consumes(MediaType.APPLICATION_JSON)
+	@Produces(MediaType.APPLICATION_JSON)
+	public Response fetch() throws Exception {
+		return Response.ok().entity(repository).build();
+	}
 
-    private void setTimeout(int numberOfRequests, AsyncResponse asyncResponse) {
-        asyncResponse.setTimeoutHandler(asyncResponse1 -> {
-            logger.error("Timeout on request with {} ", numberOfRequests);
-            asyncResponse1.resume(Response.Status.SERVICE_UNAVAILABLE);
-        });
-        asyncResponse.setTimeout(10, TimeUnit.SECONDS);
-    }
+	@POST
+	@Path("ids")
+	@Consumes(MediaType.APPLICATION_JSON)
+	@Produces(MediaType.APPLICATION_JSON)
+	public Response saveIds(@Context HttpServletRequest request, Set<String> ids) throws Exception {
 
+		if (repository != null && !repository.isEmpty()) {
+			return Response.status(Response.Status.BAD_REQUEST).build();
+		}
+		System.out.println("Receive Ids: "+ids);
+		repository = ids;
 
-    @GET
-    @Path("ids")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response fetch () throws Exception {
-        return Response.ok().entity(repository).build();
-    }
+		return Response.created(new URI(request.getRequestURI())).entity(repository).build();
+	}
 
+	@PUT
+	@Path("ids")
+	@Consumes(MediaType.APPLICATION_JSON)
+	@Produces(MediaType.APPLICATION_JSON)
+	public Response update(@Context HttpServletRequest request, Set<String> ids) throws Exception {
 
-    @POST
-    @Path("ids")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response saveIds (@Context HttpServletRequest request, Set<String> ids) throws Exception {
+		if (repository.size() == 0) {
+			return Response.status(Response.Status.BAD_REQUEST).build();
+		}
+		repository.clear();
+		repository.addAll(ids);
 
-        if(repository != null) {
-            return Response.status(Response.Status.BAD_REQUEST).build();
-        }
-        repository = ids;
+		return Response.accepted().entity(repository).build();
+	}
 
-        return Response.created(new URI(request.getRequestURI())).entity(repository).build();
-    }
+	@DELETE
+	@Path("ids/{id}")
+	@Consumes(MediaType.APPLICATION_JSON)
+	@Produces(MediaType.APPLICATION_JSON)
+	public Response delete(@PathParam("id") String id) {
 
-    @PUT
-    @Path("ids")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response update (@Context HttpServletRequest request, Set<String> ids) throws Exception {
+		boolean remove = repository.remove(id);
 
-        if(repository.size() == 0) {
-            return Response.status(Response.Status.BAD_REQUEST).build();
-        }
-        repository.clear();
-        repository.addAll(ids);
+		return Response.ok(remove).build();
 
-        return Response.accepted().entity(repository).build();
-    }
-
-
-    @DELETE
-    @Path("ids/{id}")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response delete (@PathParam("id") String id) {
-
-        boolean remove = repository.remove(id);
-
-        return Response.ok(remove).build();
-
-    }
+	}
 
 }
